@@ -13,6 +13,11 @@ let userIsInteractingWithTeleprompter = false;
 let resumeTeleprompterAfterInteraction = false;
 
 const PERMISSIONS_KEY = 'daily_permissions_granted';
+const PREFERRED_RECORDER_TYPES = [
+    'video/webm;codecs=vp8,opus',
+    'video/webm;codecs=vp9,opus',
+    'video/webm'
+];
 
 // DOM Elements
 const cameraPreview = document.getElementById('cameraPreview');
@@ -96,7 +101,6 @@ function setupEventListeners() {
     teleprompterText.addEventListener('wheel', handleTeleprompterWheel, { passive: true });
     teleprompterText.addEventListener('scroll', handleTeleprompterScroll);
 
-    // Stop camera/mic when tab is hidden or page is left
     document.addEventListener('visibilitychange', handleVisibilityChange);
     window.addEventListener('pagehide', stopAllTracks);
     window.addEventListener('beforeunload', stopAllTracks);
@@ -205,10 +209,8 @@ function handleTeleprompterScroll() {
 function handleVisibilityChange() {
     if (document.hidden) {
         stopAllTracks();
-    } else {
-        if (localStorage.getItem(PERMISSIONS_KEY) === 'true' && !mediaStream) {
-            requestPermissions();
-        }
+    } else if (localStorage.getItem(PERMISSIONS_KEY) === 'true' && !mediaStream) {
+        requestPermissions();
     }
 }
 
@@ -226,22 +228,18 @@ function stopAllTracks() {
 }
 
 function getSupportedMimeType() {
-    const types = [
-        'video/mp4;codecs=h264,aac',
-        'video/mp4',
-        'video/webm;codecs=vp9,opus',
-        'video/webm;codecs=vp8,opus',
-        'video/webm'
-    ];
-    for (const type of types) {
-        if (window.MediaRecorder && MediaRecorder.isTypeSupported(type)) return type;
+    if (!window.MediaRecorder) return '';
+
+    for (const type of PREFERRED_RECORDER_TYPES) {
+        if (MediaRecorder.isTypeSupported(type)) return type;
     }
+
     return '';
 }
 
 function getFileExtensionFromMimeType(mimeType) {
-    if (mimeType.includes('mp4')) return 'mp4';
     if (mimeType.includes('webm')) return 'webm';
+    if (mimeType.includes('mp4')) return 'mp4';
     return 'webm';
 }
 
@@ -259,15 +257,23 @@ async function startRecording() {
         const options = {
             audioBitsPerSecond: 128000,
             videoBitsPerSecond: 2500000,
+            bitsPerSecond: 3000000,
+            videoKeyFrameIntervalDuration: 1000
         };
+
         if (mimeType) options.mimeType = mimeType;
 
         mediaRecorder = new MediaRecorder(mediaStream, options);
 
         mediaRecorder.ondataavailable = (event) => {
-            if (event.data.size > 0) {
+            if (event.data && event.data.size > 0) {
                 recordedChunks.push(event.data);
             }
+        };
+
+        mediaRecorder.onerror = (event) => {
+            console.error('MediaRecorder error:', event.error || event);
+            showStatus('Recording error occurred.', 'error');
         };
 
         mediaRecorder.onstart = () => {
@@ -288,10 +294,10 @@ async function startRecording() {
 
             const finalMimeType = mediaRecorder.mimeType || getSupportedMimeType() || 'video/webm';
             recordedBlob = new Blob(recordedChunks, { type: finalMimeType });
-            showStatus('Recording complete. Save to Photos or Files.', 'success');
+            showStatus(`Recording complete. Ready to save as ${getFileExtensionFromMimeType(finalMimeType).toUpperCase()}.`, 'success');
         };
 
-        mediaRecorder.start();
+        mediaRecorder.start(1000);
     } catch (error) {
         console.error('Error starting recording:', error);
         showStatus('Failed to start recording: ' + error.message, 'error');
