@@ -17,8 +17,17 @@
             </div>
         </div>
 
-        <!-- Teleprompter Text Area -->
+        <!-- Teleprompter Section -->
         <div class="teleprompter-section">
+            <div class="teleprompter-controls">
+                <button id="teleprompterPlayBtn" class="btn btn-primary">Play</button>
+                <div class="speed-control">
+                    <label for="speedSlider">Speed</label>
+                    <input id="speedSlider" type="range" min="20" max="200" value="60" />
+                    <span id="speedValue">60 px/s</span>
+                </div>
+            </div>
+
             <textarea 
                 id="teleprompterText" 
                 placeholder="Paste your script here..."

@@ -5,6 +5,13 @@ let recordedChunks = [];
 let isRecording = false;
 let recordedBlob = null;
 
+let teleprompterPlaying = false;
+let teleprompterRAF = null;
+let teleprompterLastFrame = 0;
+let teleprompterSpeed = 60;
+let userIsInteractingWithTeleprompter = false;
+let resumeTeleprompterAfterInteraction = false;
+
 const PERMISSIONS_KEY = 'daily_permissions_granted';
 
 // DOM Elements
@@ -20,6 +27,9 @@ const recordingIndicator = document.getElementById('recordingIndicator');
 const permissionPrompt = document.getElementById('permissionPrompt');
 const allowBtn = document.getElementById('allowBtn');
 const denyBtn = document.getElementById('denyBtn');
+const teleprompterPlayBtn = document.getElementById('teleprompterPlayBtn');
+const speedSlider = document.getElementById('speedSlider');
+const speedValue = document.getElementById('speedValue');
 
 // Initialize app on load
 window.addEventListener('DOMContentLoaded', initializeApp);
@@ -34,6 +44,8 @@ async function initializeApp() {
     }
 
     setupEventListeners();
+    updateCharCount();
+    updateSpeedDisplay();
 }
 
 function showPermissionPrompt() {
@@ -73,6 +85,16 @@ function setupEventListeners() {
     saveBtn.addEventListener('click', saveRecording);
     discardBtn.addEventListener('click', discardRecording);
     teleprompterText.addEventListener('input', updateCharCount);
+    teleprompterPlayBtn.addEventListener('click', toggleTeleprompterPlayback);
+    speedSlider.addEventListener('input', handleSpeedChange);
+
+    teleprompterText.addEventListener('pointerdown', handleTeleprompterInteractionStart);
+    teleprompterText.addEventListener('pointerup', handleTeleprompterInteractionEnd);
+    teleprompterText.addEventListener('pointercancel', handleTeleprompterInteractionEnd);
+    teleprompterText.addEventListener('touchstart', handleTeleprompterInteractionStart, { passive: true });
+    teleprompterText.addEventListener('touchend', handleTeleprompterInteractionEnd, { passive: true });
+    teleprompterText.addEventListener('wheel', handleTeleprompterWheel, { passive: true });
+    teleprompterText.addEventListener('scroll', handleTeleprompterScroll);
 
     // Stop camera/mic when tab is hidden or page is left
     document.addEventListener('visibilitychange', handleVisibilityChange);
@@ -83,6 +105,101 @@ function setupEventListeners() {
 function updateCharCount() {
     const count = teleprompterText.value.length;
     charCount.textContent = `${count.toLocaleString()} characters`;
+}
+
+function updateSpeedDisplay() {
+    teleprompterSpeed = Number(speedSlider.value);
+    speedValue.textContent = `${teleprompterSpeed} px/s`;
+}
+
+function handleSpeedChange() {
+    updateSpeedDisplay();
+}
+
+function toggleTeleprompterPlayback() {
+    if (teleprompterPlaying) {
+        stopTeleprompterPlayback();
+        return;
+    }
+    startTeleprompterPlayback();
+}
+
+function startTeleprompterPlayback() {
+    teleprompterPlaying = true;
+    teleprompterPlayBtn.textContent = 'Pause';
+    teleprompterLastFrame = performance.now();
+    showStatus('Teleprompter playing.', 'info');
+    teleprompterRAF = requestAnimationFrame(stepTeleprompter);
+}
+
+function stopTeleprompterPlayback() {
+    teleprompterPlaying = false;
+    teleprompterPlayBtn.textContent = 'Play';
+    if (teleprompterRAF) {
+        cancelAnimationFrame(teleprompterRAF);
+        teleprompterRAF = null;
+    }
+}
+
+function stepTeleprompter(now) {
+    if (!teleprompterPlaying) return;
+    const elapsed = (now - teleprompterLastFrame) / 1000;
+    teleprompterLastFrame = now;
+
+    if (!userIsInteractingWithTeleprompter) {
+        teleprompterText.scrollTop += teleprompterSpeed * elapsed;
+        const maxScroll = teleprompterText.scrollHeight - teleprompterText.clientHeight;
+        if (teleprompterText.scrollTop >= maxScroll) {
+            teleprompterText.scrollTop = maxScroll;
+            stopTeleprompterPlayback();
+            showStatus('Teleprompter reached the end.', 'success');
+            return;
+        }
+    }
+
+    teleprompterRAF = requestAnimationFrame(stepTeleprompter);
+}
+
+function handleTeleprompterInteractionStart() {
+    userIsInteractingWithTeleprompter = true;
+    resumeTeleprompterAfterInteraction = teleprompterPlaying;
+    if (teleprompterPlaying) {
+        teleprompterPlayBtn.textContent = 'Resume';
+    }
+}
+
+function handleTeleprompterInteractionEnd() {
+    userIsInteractingWithTeleprompter = false;
+    if (resumeTeleprompterAfterInteraction) {
+        teleprompterPlayBtn.textContent = 'Pause';
+    } else if (!teleprompterPlaying) {
+        teleprompterPlayBtn.textContent = 'Play';
+    }
+}
+
+function handleTeleprompterWheel() {
+    if (teleprompterPlaying) {
+        userIsInteractingWithTeleprompter = true;
+        resumeTeleprompterAfterInteraction = true;
+        teleprompterPlayBtn.textContent = 'Resume';
+        clearTimeout(handleTeleprompterWheel._timer);
+        handleTeleprompterWheel._timer = setTimeout(() => {
+            userIsInteractingWithTeleprompter = false;
+            if (teleprompterPlaying) {
+                teleprompterPlayBtn.textContent = 'Pause';
+            }
+        }, 120);
+    }
+}
+
+function handleTeleprompterScroll() {
+    if (userIsInteractingWithTeleprompter && teleprompterPlaying) {
+        clearTimeout(handleTeleprompterScroll._timer);
+        handleTeleprompterScroll._timer = setTimeout(() => {
+            userIsInteractingWithTeleprompter = false;
+            teleprompterPlayBtn.textContent = 'Pause';
+        }, 120);
+    }
 }
 
 function handleVisibilityChange() {
@@ -96,6 +213,7 @@ function handleVisibilityChange() {
 }
 
 function stopAllTracks() {
+    stopTeleprompterPlayback();
     if (mediaStream) {
         mediaStream.getTracks().forEach(track => track.stop());
         mediaStream = null;
@@ -107,7 +225,6 @@ function stopAllTracks() {
     }
 }
 
-// Pick the best supported MIME type for this device
 function getSupportedMimeType() {
     const types = [
         'video/mp4;codecs=h264,aac',
@@ -117,9 +234,15 @@ function getSupportedMimeType() {
         'video/webm'
     ];
     for (const type of types) {
-        if (MediaRecorder.isTypeSupported(type)) return type;
+        if (window.MediaRecorder && MediaRecorder.isTypeSupported(type)) return type;
     }
     return '';
+}
+
+function getFileExtensionFromMimeType(mimeType) {
+    if (mimeType.includes('mp4')) return 'mp4';
+    if (mimeType.includes('webm')) return 'webm';
+    return 'webm';
 }
 
 async function startRecording() {
@@ -163,10 +286,9 @@ async function startRecording() {
             discardBtn.disabled = false;
             recordingIndicator.classList.remove('active');
 
-            // Build the blob now so it's ready to save
-            const mimeType = mediaRecorder.mimeType || 'video/mp4';
-            recordedBlob = new Blob(recordedChunks, { type: mimeType });
-            showStatus('Recording complete. Tap Save to save to your device.', 'success');
+            const finalMimeType = mediaRecorder.mimeType || getSupportedMimeType() || 'video/webm';
+            recordedBlob = new Blob(recordedChunks, { type: finalMimeType });
+            showStatus('Recording complete. Save to Photos or Files.', 'success');
         };
 
         mediaRecorder.start();
@@ -188,44 +310,38 @@ async function saveRecording() {
         return;
     }
 
-    const mimeType = recordedBlob.type || 'video/mp4';
-    const extension = mimeType.includes('mp4') ? 'mp4' : 'webm';
+    const mimeType = recordedBlob.type || 'video/webm';
+    const extension = getFileExtensionFromMimeType(mimeType);
     const fileName = `Daily-${new Date().toISOString().slice(0, 10)}-${Date.now()}.${extension}`;
+    const file = new File([recordedBlob], fileName, { type: mimeType });
 
-    // Try Web Share API first (shows native iOS share sheet with Save to Photos/Files)
-    if (navigator.canShare && navigator.share) {
+    if (navigator.canShare && navigator.share && navigator.canShare({ files: [file] })) {
         try {
-            const file = new File([recordedBlob], fileName, { type: mimeType });
-            if (navigator.canShare({ files: [file] })) {
-                await navigator.share({
-                    files: [file],
-                    title: 'Daily Recording',
-                });
-                showStatus('Video shared successfully!', 'success');
-                resetRecording();
-                return;
-            }
+            await navigator.share({
+                files: [file],
+                title: 'Daily Recording',
+                text: 'Your recorded video'
+            });
+            showStatus('Open the shared file and save it to Photos/Files.', 'success');
+            resetRecording();
+            return;
         } catch (error) {
-            if (error.name !== 'AbortError') {
-                console.warn('Web Share failed, falling back to download:', error);
-            } else {
-                // User cancelled the share sheet
-                return;
-            }
+            if (error.name === 'AbortError') return;
+            console.warn('Web Share failed, falling back to download:', error);
         }
     }
 
-    // Fallback: trigger a download (works on desktop/Android)
     try {
-        const url = URL.createObjectURL(recordedBlob);
+        const url = URL.createObjectURL(file);
         const a = document.createElement('a');
         a.href = url;
         a.download = fileName;
+        a.rel = 'noopener';
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-        showStatus('Video saved!', 'success');
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        showStatus('Downloaded the video file.', 'success');
         resetRecording();
     } catch (error) {
         console.error('Error saving recording:', error);
