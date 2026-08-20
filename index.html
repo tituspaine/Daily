@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Daily - Teleprompter Recorder</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Camera Preview -->
+        <div class="camera-section">
+            <video id="cameraPreview" autoplay muted playsinline></video>
+            <div class="recording-indicator" id="recordingIndicator">
+                <span class="recording-dot"></span>
+                Recording...
+            </div>
+        </div>
+
+        <!-- Teleprompter Text Area -->
+        <div class="teleprompter-section">
+            <textarea 
+                id="teleprompterText" 
+                placeholder="Paste your script here..."
+                spellcheck="false"
+            ></textarea>
+            <div class="char-count" id="charCount">0 characters</div>
+        </div>
+
+        <!-- Controls -->
+        <div class="controls-section">
+            <button id="recordBtn" class="btn btn-primary">Record</button>
+            <button id="stopBtn" class="btn btn-danger" disabled>Done</button>
+            <button id="saveBtn" class="btn btn-success" disabled>Save</button>
+            <button id="discardBtn" class="btn btn-secondary" disabled>Discard</button>
+        </div>
+
+        <!-- Status Messages -->
+        <div id="statusMessage" class="status-message"></div>
+    </div>
+
+    <!-- Permission Prompt (hidden by default) -->
+    <div id="permissionPrompt" class="permission-prompt" style="display: none;">
+        <div class="permission-content">
+            <h2>Camera & Microphone Access</h2>
+            <p>Daily needs access to your camera and microphone to record videos.</p>
+            <button id="allowBtn" class="btn btn-primary">Allow Access</button>
+            <button id="denyBtn" class="btn btn-secondary">Deny</button>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
