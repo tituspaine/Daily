@@ -7,8 +7,9 @@ A simple, mobile-friendly web app for recording videos while reading from a tele
 - 📱 **Mobile-Friendly**: Works perfectly on smartphones and tablets
 - 🎥 **Front-Facing Camera**: Auto-opens your device's front camera for self-recording
 - 📝 **Teleprompter**: Paste any amount of text to read from while recording
+- ▶️ **Teleprompter Playback**: Play/pause auto-scroll with a speed slider and manual scroll pause/resume
 - 🎙️ **Audio & Video Recording**: Records both your face and audio
-- 💾 **Easy Save**: Download recordings directly to your device
+- 💾 **Hybrid Save**: Prefer native MP4 recording, convert WebM to MP4 on Save when needed, and fall back to the original recording if conversion is unavailable
 - 🔒 **Privacy-First**: All recordings stay on your device (no cloud upload)
 - ✅ **Permission Memory**: Remembers your camera/microphone approval for next time
 
@@ -18,15 +19,16 @@ A simple, mobile-friendly web app for recording videos while reading from a tele
 2. **Grant Permissions**: Allow camera and microphone access when prompted
 3. **Add Script**: Paste your script/text into the text box in the middle
 4. **Record**: Click the "Record" button to start recording
-5. **Scroll & Read**: Scroll through your text with your thumb while reading
-6. **Stop**: Click "Done" when finished
-7. **Save**: Click "Save" to download the video to your device
+5. **Play the Teleprompter**: Use Play/Pause and adjust the scroll speed as needed
+6. **Scroll & Read**: You can still drag/scroll the script manually and auto-scroll resumes when you release it
+7. **Stop**: Click "Done" when finished
+8. **Save**: Click "Save" to share/download the exported video file
 
 ## Technical Details
 
-- **Built With**: Vanilla HTML, CSS, and JavaScript (no dependencies)
+- **Built With**: Vanilla HTML, CSS, and JavaScript with vendored ffmpeg.wasm assets for browser-side MP4 conversion
 - **Browser Support**: Chrome, Firefox, Safari, Edge (with camera/microphone support)
-- **Video Format**: WebM (VP9 or VP8 codec)
+- **Video Format**: Native MP4 when available, otherwise WebM with on-device MP4 conversion on Save when supported
 - **Storage**: Uses browser localStorage for permission memory
 - **Deployment**: GitHub Pages (static site)
 
@@ -37,6 +39,7 @@ A simple, mobile-friendly web app for recording videos while reading from a tele
 ├── index.html       # Main HTML structure
 ├── styles.css       # Styling and responsive design
 ├── app.js          # JavaScript logic
+├── vendor/ffmpeg/  # Local ffmpeg.wasm assets for MP4 conversion
 └── README.md       # This file
 ```
 
@@ -51,7 +54,9 @@ A simple, mobile-friendly web app for recording videos while reading from a tele
 
 - Recordings are NOT stored in the cloud - they're saved locally to your device
 - Camera/microphone permissions are remembered in your browser's local storage
-- Videos are saved in WebM format (compatible with most modern browsers and players)
+- MP4 export is preferred whenever the browser supports it natively
+- WebM recordings are converted to MP4 on Save when the browser can run ffmpeg.wasm locally
+- If MP4 conversion fails, the original recording is still saved so export never hard-fails
 - Works best on devices with modern browsers supporting MediaRecorder API
 
 ## License
