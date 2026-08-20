@@ -8,7 +8,7 @@ A simple, mobile-friendly web app for recording videos while reading from a tele
 - 🎥 **Front-Facing Camera**: Auto-opens your device's front camera for self-recording
 - 📝 **Teleprompter**: Paste any amount of text to read from while recording
 - 🎙️ **Audio & Video Recording**: Records both your face and audio
-- 💾 **Easy Save**: Download recordings directly to your device
+- 💾 **Hybrid Save**: Save/share the real recorded file and prefer MP4 export when possible
 - 🔒 **Privacy-First**: All recordings stay on your device (no cloud upload)
 - ✅ **Permission Memory**: Remembers your camera/microphone approval for next time
 
@@ -26,7 +26,7 @@ A simple, mobile-friendly web app for recording videos while reading from a tele
 
 - **Built With**: Vanilla HTML, CSS, and JavaScript (no dependencies)
 - **Browser Support**: Chrome, Firefox, Safari, Edge (with camera/microphone support)
-- **Video Format**: WebM (VP9 or VP8 codec)
+- **Video Format**: MP4 when browser-supported, otherwise WebM with on-save MP4 conversion attempt and fallback
 - **Storage**: Uses browser localStorage for permission memory
 - **Deployment**: GitHub Pages (static site)
 
@@ -51,7 +51,7 @@ A simple, mobile-friendly web app for recording videos while reading from a tele
 
 - Recordings are NOT stored in the cloud - they're saved locally to your device
 - Camera/microphone permissions are remembered in your browser's local storage
-- Videos are saved in WebM format (compatible with most modern browsers and players)
+- Videos are saved as real downloadable/shareable files (MP4 preferred; WebM fallback when conversion is unavailable)
 - Works best on devices with modern browsers supporting MediaRecorder API
 
 ## License
