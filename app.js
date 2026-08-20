@@ -3,6 +3,7 @@ let mediaStream = null;
 let mediaRecorder = null;
 let recordedChunks = [];
 let isRecording = false;
+let recordedBlob = null;
 
 const PERMISSIONS_KEY = 'daily_permissions_granted';
 
@@ -24,18 +25,14 @@ const denyBtn = document.getElementById('denyBtn');
 window.addEventListener('DOMContentLoaded', initializeApp);
 
 async function initializeApp() {
-    // Check if permissions were previously granted
     const permissionsGranted = localStorage.getItem(PERMISSIONS_KEY);
-    
+
     if (permissionsGranted === 'true') {
-        // Permissions were granted before, try to access devices
         await requestPermissions();
     } else if (permissionsGranted === null) {
-        // First time visiting, show custom prompt
         showPermissionPrompt();
     }
-    // If explicitly denied, do nothing
-    
+
     setupEventListeners();
 }
 
@@ -57,13 +54,10 @@ denyBtn.addEventListener('click', () => {
 
 async function requestPermissions() {
     try {
-        // Request both camera and microphone
         mediaStream = await navigator.mediaDevices.getUserMedia({
             video: { facingMode: 'user' },
             audio: true
         });
-        
-        // Display camera feed (mirrored via CSS transform)
         cameraPreview.srcObject = mediaStream;
         showStatus('Camera and microphone ready!', 'success');
     } catch (error) {
@@ -79,8 +73,8 @@ function setupEventListeners() {
     saveBtn.addEventListener('click', saveRecording);
     discardBtn.addEventListener('click', discardRecording);
     teleprompterText.addEventListener('input', updateCharCount);
-    
-    // Stop camera/mic when leaving the page or tab
+
+    // Stop camera/mic when tab is hidden or page is left
     document.addEventListener('visibilitychange', handleVisibilityChange);
     window.addEventListener('pagehide', stopAllTracks);
     window.addEventListener('beforeunload', stopAllTracks);
@@ -93,10 +87,8 @@ function updateCharCount() {
 
 function handleVisibilityChange() {
     if (document.hidden) {
-        // Page is hidden - stop camera and mic
         stopAllTracks();
     } else {
-        // Page is visible - restart if permissions were granted
         if (localStorage.getItem(PERMISSIONS_KEY) === 'true' && !mediaStream) {
             requestPermissions();
         }
@@ -109,11 +101,25 @@ function stopAllTracks() {
         mediaStream = null;
         cameraPreview.srcObject = null;
     }
-    
     if (mediaRecorder && isRecording) {
         mediaRecorder.stop();
         isRecording = false;
     }
+}
+
+// Pick the best supported MIME type for this device
+function getSupportedMimeType() {
+    const types = [
+        'video/mp4;codecs=h264,aac',
+        'video/mp4',
+        'video/webm;codecs=vp9,opus',
+        'video/webm;codecs=vp8,opus',
+        'video/webm'
+    ];
+    for (const type of types) {
+        if (MediaRecorder.isTypeSupported(type)) return type;
+    }
+    return '';
 }
 
 async function startRecording() {
@@ -121,33 +127,26 @@ async function startRecording() {
         showStatus('Camera not available. Please check permissions.', 'error');
         return;
     }
-    
+
     recordedChunks = [];
-    
+    recordedBlob = null;
+
     try {
-        // Create MediaRecorder with audio and video
+        const mimeType = getSupportedMimeType();
         const options = {
             audioBitsPerSecond: 128000,
             videoBitsPerSecond: 2500000,
-            mimeType: 'video/webm;codecs=vp9,opus'
         };
-        
-        // Fallback for browsers that don't support vp9
-        if (!MediaRecorder.isTypeSupported(options.mimeType)) {
-            options.mimeType = 'video/webm;codecs=vp8,opus';
-        }
-        if (!MediaRecorder.isTypeSupported(options.mimeType)) {
-            options.mimeType = 'video/webm';
-        }
-        
+        if (mimeType) options.mimeType = mimeType;
+
         mediaRecorder = new MediaRecorder(mediaStream, options);
-        
+
         mediaRecorder.ondataavailable = (event) => {
             if (event.data.size > 0) {
                 recordedChunks.push(event.data);
             }
         };
-        
+
         mediaRecorder.onstart = () => {
             isRecording = true;
             recordBtn.disabled = true;
@@ -155,7 +154,7 @@ async function startRecording() {
             recordingIndicator.classList.add('active');
             showStatus('Recording started...', 'info');
         };
-        
+
         mediaRecorder.onstop = () => {
             isRecording = false;
             recordBtn.disabled = false;
@@ -163,9 +162,13 @@ async function startRecording() {
             saveBtn.disabled = false;
             discardBtn.disabled = false;
             recordingIndicator.classList.remove('active');
-            showStatus('Recording complete. Click Save to download.', 'success');
+
+            // Build the blob now so it's ready to save
+            const mimeType = mediaRecorder.mimeType || 'video/mp4';
+            recordedBlob = new Blob(recordedChunks, { type: mimeType });
+            showStatus('Recording complete. Tap Save to save to your device.', 'success');
         };
-        
+
         mediaRecorder.start();
     } catch (error) {
         console.error('Error starting recording:', error);
@@ -179,24 +182,50 @@ function stopRecording() {
     }
 }
 
-function saveRecording() {
-    if (recordedChunks.length === 0) {
+async function saveRecording() {
+    if (!recordedBlob) {
         showStatus('No recording to save.', 'error');
         return;
     }
-    
+
+    const mimeType = recordedBlob.type || 'video/mp4';
+    const extension = mimeType.includes('mp4') ? 'mp4' : 'webm';
+    const fileName = `Daily-${new Date().toISOString().slice(0, 10)}-${Date.now()}.${extension}`;
+
+    // Try Web Share API first (shows native iOS share sheet with Save to Photos/Files)
+    if (navigator.canShare && navigator.share) {
+        try {
+            const file = new File([recordedBlob], fileName, { type: mimeType });
+            if (navigator.canShare({ files: [file] })) {
+                await navigator.share({
+                    files: [file],
+                    title: 'Daily Recording',
+                });
+                showStatus('Video shared successfully!', 'success');
+                resetRecording();
+                return;
+            }
+        } catch (error) {
+            if (error.name !== 'AbortError') {
+                console.warn('Web Share failed, falling back to download:', error);
+            } else {
+                // User cancelled the share sheet
+                return;
+            }
+        }
+    }
+
+    // Fallback: trigger a download (works on desktop/Android)
     try {
-        const blob = new Blob(recordedChunks, { type: 'video/webm' });
-        const url = URL.createObjectURL(blob);
+        const url = URL.createObjectURL(recordedBlob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `Daily-${new Date().toISOString().slice(0, 10)}-${new Date().getTime()}.webm`;
+        a.download = fileName;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
-        
-        showStatus('Video saved successfully!', 'success');
+        showStatus('Video saved!', 'success');
         resetRecording();
     } catch (error) {
         console.error('Error saving recording:', error);
@@ -206,6 +235,7 @@ function saveRecording() {
 
 function discardRecording() {
     recordedChunks = [];
+    recordedBlob = null;
     resetRecording();
     showStatus('Recording discarded.', 'info');
 }
@@ -221,8 +251,7 @@ function resetRecording() {
 function showStatus(message, type) {
     statusMessage.textContent = message;
     statusMessage.className = `status-message ${type}`;
-    
-    // Clear message after 5 seconds for non-error messages
+
     if (type !== 'error') {
         setTimeout(() => {
             statusMessage.textContent = '';
@@ -230,8 +259,3 @@ function showStatus(message, type) {
         }, 5000);
     }
 }
-
-// Cleanup on page unload
-window.addEventListener('beforeunload', () => {
-    stopAllTracks();
-});
