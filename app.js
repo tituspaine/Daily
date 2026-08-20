@@ -280,7 +280,10 @@ async function getFfmpegConverter() {
 
         await ffmpeg.load({ coreURL, wasmURL, workerURL });
         return { ffmpeg, fetchFile };
-    })();
+    })().catch((error) => {
+        ffmpegConverterPromise = null;
+        throw error;
+    });
 
     return ffmpegConverterPromise;
 }
