@@ -12,6 +12,11 @@ let teleprompterSpeed = 60;
 let userIsInteractingWithTeleprompter = false;
 let resumeTeleprompterAfterInteraction = false;
 
+let audioContext = null;
+let audioAnalyser = null;
+let audioSource = null;
+let audioMeterRAF = null;
+
 const PERMISSIONS_KEY = 'daily_permissions_granted';
 const PREFERRED_RECORDER_TYPES = [
     'video/webm;codecs=vp8,opus',
@@ -20,23 +25,28 @@ const PREFERRED_RECORDER_TYPES = [
 ];
 
 // DOM Elements
-const cameraPreview = document.getElementById('cameraPreview');
-const recordBtn = document.getElementById('recordBtn');
-const stopBtn = document.getElementById('stopBtn');
-const saveBtn = document.getElementById('saveBtn');
-const discardBtn = document.getElementById('discardBtn');
-const teleprompterText = document.getElementById('teleprompterText');
-const charCount = document.getElementById('charCount');
-const statusMessage = document.getElementById('statusMessage');
-const recordingIndicator = document.getElementById('recordingIndicator');
-const permissionPrompt = document.getElementById('permissionPrompt');
-const allowBtn = document.getElementById('allowBtn');
-const denyBtn = document.getElementById('denyBtn');
-const teleprompterPlayBtn = document.getElementById('teleprompterPlayBtn');
-const speedSlider = document.getElementById('speedSlider');
-const speedValue = document.getElementById('speedValue');
+const cameraPreview        = document.getElementById('cameraPreview');
+const recordBtn            = document.getElementById('recordBtn');
+const stopBtn              = document.getElementById('stopBtn');
+const saveBtn              = document.getElementById('saveBtn');
+const discardBtn           = document.getElementById('discardBtn');
+const teleprompterText     = document.getElementById('teleprompterText');
+const charCount            = document.getElementById('charCount');
+const statusMessage        = document.getElementById('statusMessage');
+const recordingIndicator   = document.getElementById('recordingIndicator');
+const permissionPrompt     = document.getElementById('permissionPrompt');
+const allowBtn             = document.getElementById('allowBtn');
+const denyBtn              = document.getElementById('denyBtn');
+const teleprompterPlayBtn  = document.getElementById('teleprompterPlayBtn');
+const speedSlider          = document.getElementById('speedSlider');
+const speedValue           = document.getElementById('speedValue');
+const countdownOverlay     = document.getElementById('countdownOverlay');
+const countdownNumber      = document.getElementById('countdownNumber');
+const lowerThird           = document.getElementById('lowerThird');
+const audioBar             = document.getElementById('audioBar');
+const clearScriptBtn       = document.getElementById('clearScriptBtn');
 
-// Initialize app on load
+// Initialize
 window.addEventListener('DOMContentLoaded', initializeApp);
 
 async function initializeApp() {
@@ -76,6 +86,7 @@ async function requestPermissions() {
             audio: true
         });
         cameraPreview.srcObject = mediaStream;
+        startAudioMeter(mediaStream);
         showStatus('Camera and microphone ready!', 'success');
     } catch (error) {
         console.error('Permission denied:', error);
@@ -84,14 +95,48 @@ async function requestPermissions() {
     }
 }
 
+// ─── Audio meter ─────────────────────────────────────────────
+function startAudioMeter(stream) {
+    try {
+        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        audioAnalyser = audioContext.createAnalyser();
+        audioAnalyser.fftSize = 256;
+        audioSource = audioContext.createMediaStreamSource(stream);
+        audioSource.connect(audioAnalyser);
+        drawAudioMeter();
+    } catch (e) {
+        console.warn('Audio meter unavailable:', e);
+    }
+}
+
+function drawAudioMeter() {
+    if (!audioAnalyser) return;
+    const buf = new Uint8Array(audioAnalyser.frequencyBinCount);
+    audioAnalyser.getByteFrequencyData(buf);
+    const avg = buf.reduce((a, b) => a + b, 0) / buf.length;
+    const pct = Math.min(100, (avg / 128) * 100);
+    audioBar.style.width = pct + '%';
+    audioMeterRAF = requestAnimationFrame(drawAudioMeter);
+}
+
+function stopAudioMeter() {
+    if (audioMeterRAF) { cancelAnimationFrame(audioMeterRAF); audioMeterRAF = null; }
+    if (audioSource)   { try { audioSource.disconnect(); } catch (_) {} audioSource = null; }
+    if (audioContext)  { try { audioContext.close(); } catch (_) {} audioContext = null; }
+    audioAnalyser = null;
+    if (audioBar) audioBar.style.width = '0%';
+}
+
+// ─── Event Listeners ─────────────────────────────────────────
 function setupEventListeners() {
-    recordBtn.addEventListener('click', startRecording);
+    recordBtn.addEventListener('click', startCountdownThenRecord);
     stopBtn.addEventListener('click', stopRecording);
     saveBtn.addEventListener('click', saveRecording);
     discardBtn.addEventListener('click', discardRecording);
     teleprompterText.addEventListener('input', updateCharCount);
     teleprompterPlayBtn.addEventListener('click', toggleTeleprompterPlayback);
     speedSlider.addEventListener('input', handleSpeedChange);
+    clearScriptBtn.addEventListener('click', clearScript);
 
     teleprompterText.addEventListener('pointerdown', handleTeleprompterInteractionStart);
     teleprompterText.addEventListener('pointerup', handleTeleprompterInteractionEnd);
@@ -106,6 +151,13 @@ function setupEventListeners() {
     window.addEventListener('beforeunload', stopAllTracks);
 }
 
+function clearScript() {
+    teleprompterText.value = '';
+    teleprompterText.scrollTop = 0;
+    updateCharCount();
+    stopTeleprompterPlayback();
+}
+
 function updateCharCount() {
     const count = teleprompterText.value.length;
     charCount.textContent = `${count.toLocaleString()} characters`;
@@ -113,13 +165,14 @@ function updateCharCount() {
 
 function updateSpeedDisplay() {
     teleprompterSpeed = Number(speedSlider.value);
-    speedValue.textContent = `${teleprompterSpeed} px/s`;
+    speedValue.textContent = teleprompterSpeed;
 }
 
 function handleSpeedChange() {
     updateSpeedDisplay();
 }
 
+// ─── Teleprompter ─────────────────────────────────────────────
 function toggleTeleprompterPlayback() {
     if (teleprompterPlaying) {
         stopTeleprompterPlayback();
@@ -130,7 +183,7 @@ function toggleTeleprompterPlayback() {
 
 function startTeleprompterPlayback() {
     teleprompterPlaying = true;
-    teleprompterPlayBtn.textContent = 'Pause';
+    teleprompterPlayBtn.textContent = '⏸ Pause';
     teleprompterLastFrame = performance.now();
     showStatus('Teleprompter playing.', 'info');
     teleprompterRAF = requestAnimationFrame(stepTeleprompter);
@@ -138,7 +191,7 @@ function startTeleprompterPlayback() {
 
 function stopTeleprompterPlayback() {
     teleprompterPlaying = false;
-    teleprompterPlayBtn.textContent = 'Play';
+    teleprompterPlayBtn.textContent = '▶ Play';
     if (teleprompterRAF) {
         cancelAnimationFrame(teleprompterRAF);
         teleprompterRAF = null;
@@ -168,16 +221,16 @@ function handleTeleprompterInteractionStart() {
     userIsInteractingWithTeleprompter = true;
     resumeTeleprompterAfterInteraction = teleprompterPlaying;
     if (teleprompterPlaying) {
-        teleprompterPlayBtn.textContent = 'Resume';
+        teleprompterPlayBtn.textContent = '▶ Resume';
     }
 }
 
 function handleTeleprompterInteractionEnd() {
     userIsInteractingWithTeleprompter = false;
     if (resumeTeleprompterAfterInteraction) {
-        teleprompterPlayBtn.textContent = 'Pause';
+        teleprompterPlayBtn.textContent = '⏸ Pause';
     } else if (!teleprompterPlaying) {
-        teleprompterPlayBtn.textContent = 'Play';
+        teleprompterPlayBtn.textContent = '▶ Play';
     }
 }
 
@@ -185,12 +238,12 @@ function handleTeleprompterWheel() {
     if (teleprompterPlaying) {
         userIsInteractingWithTeleprompter = true;
         resumeTeleprompterAfterInteraction = true;
-        teleprompterPlayBtn.textContent = 'Resume';
+        teleprompterPlayBtn.textContent = '▶ Resume';
         clearTimeout(handleTeleprompterWheel._timer);
         handleTeleprompterWheel._timer = setTimeout(() => {
             userIsInteractingWithTeleprompter = false;
             if (teleprompterPlaying) {
-                teleprompterPlayBtn.textContent = 'Pause';
+                teleprompterPlayBtn.textContent = '⏸ Pause';
             }
         }, 120);
     }
@@ -201,11 +254,41 @@ function handleTeleprompterScroll() {
         clearTimeout(handleTeleprompterScroll._timer);
         handleTeleprompterScroll._timer = setTimeout(() => {
             userIsInteractingWithTeleprompter = false;
-            teleprompterPlayBtn.textContent = 'Pause';
+            teleprompterPlayBtn.textContent = '⏸ Pause';
         }, 120);
     }
 }
 
+// ─── Countdown → Record ───────────────────────────────────────
+function startCountdownThenRecord() {
+    if (!mediaStream) {
+        showStatus('Camera not available. Please check permissions.', 'error');
+        return;
+    }
+
+    recordBtn.disabled = true;
+    let count = 3;
+    countdownNumber.textContent = count;
+    countdownOverlay.style.display = 'flex';
+
+    const tick = () => {
+        count--;
+        if (count > 0) {
+            countdownNumber.textContent = count;
+            // retrigger animation
+            countdownNumber.style.animation = 'none';
+            void countdownNumber.offsetWidth;
+            countdownNumber.style.animation = '';
+            setTimeout(tick, 1000);
+        } else {
+            countdownOverlay.style.display = 'none';
+            startRecording();
+        }
+    };
+    setTimeout(tick, 1000);
+}
+
+// ─── Recording ────────────────────────────────────────────────
 function handleVisibilityChange() {
     if (document.hidden) {
         stopAllTracks();
@@ -216,6 +299,7 @@ function handleVisibilityChange() {
 
 function stopAllTracks() {
     stopTeleprompterPlayback();
+    stopAudioMeter();
     if (mediaStream) {
         mediaStream.getTracks().forEach(track => track.stop());
         mediaStream = null;
@@ -229,17 +313,15 @@ function stopAllTracks() {
 
 function getSupportedMimeType() {
     if (!window.MediaRecorder) return '';
-
     for (const type of PREFERRED_RECORDER_TYPES) {
         if (MediaRecorder.isTypeSupported(type)) return type;
     }
-
     return '';
 }
 
 function getFileExtensionFromMimeType(mimeType) {
     if (mimeType.includes('webm')) return 'webm';
-    if (mimeType.includes('mp4')) return 'mp4';
+    if (mimeType.includes('mp4'))  return 'mp4';
     return 'webm';
 }
 
@@ -281,7 +363,8 @@ async function startRecording() {
             recordBtn.disabled = true;
             stopBtn.disabled = false;
             recordingIndicator.classList.add('active');
-            showStatus('Recording started...', 'info');
+            lowerThird.style.display = 'block';
+            showStatus('Recording started…', 'info');
         };
 
         mediaRecorder.onstop = () => {
@@ -291,6 +374,7 @@ async function startRecording() {
             saveBtn.disabled = false;
             discardBtn.disabled = false;
             recordingIndicator.classList.remove('active');
+            lowerThird.style.display = 'none';
 
             const finalMimeType = mediaRecorder.mimeType || getSupportedMimeType() || 'video/webm';
             recordedBlob = new Blob(recordedChunks, { type: finalMimeType });
@@ -300,6 +384,7 @@ async function startRecording() {
         mediaRecorder.start(1000);
     } catch (error) {
         console.error('Error starting recording:', error);
+        recordBtn.disabled = false;
         showStatus('Failed to start recording: ' + error.message, 'error');
     }
 }
@@ -368,6 +453,7 @@ function resetRecording() {
     saveBtn.disabled = true;
     discardBtn.disabled = true;
     recordingIndicator.classList.remove('active');
+    lowerThird.style.display = 'none';
 }
 
 function showStatus(message, type) {
