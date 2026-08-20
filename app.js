@@ -16,6 +16,7 @@ let audioContext = null;
 let audioAnalyser = null;
 let audioSource = null;
 let audioMeterRAF = null;
+let audioMeterBuf = null;
 
 const PERMISSIONS_KEY = 'daily_permissions_granted';
 const PREFERRED_RECORDER_TYPES = [
@@ -103,6 +104,7 @@ function startAudioMeter(stream) {
         audioAnalyser.fftSize = 256;
         audioSource = audioContext.createMediaStreamSource(stream);
         audioSource.connect(audioAnalyser);
+        audioMeterBuf = new Uint8Array(audioAnalyser.frequencyBinCount);
         drawAudioMeter();
     } catch (e) {
         console.warn('Audio meter unavailable:', e);
@@ -110,10 +112,9 @@ function startAudioMeter(stream) {
 }
 
 function drawAudioMeter() {
-    if (!audioAnalyser) return;
-    const buf = new Uint8Array(audioAnalyser.frequencyBinCount);
-    audioAnalyser.getByteFrequencyData(buf);
-    const avg = buf.reduce((a, b) => a + b, 0) / buf.length;
+    if (!audioAnalyser || !audioMeterBuf) return;
+    audioAnalyser.getByteFrequencyData(audioMeterBuf);
+    const avg = audioMeterBuf.reduce((a, b) => a + b, 0) / audioMeterBuf.length;
     const pct = Math.min(100, (avg / 128) * 100);
     audioBar.style.width = pct + '%';
     audioMeterRAF = requestAnimationFrame(drawAudioMeter);
@@ -124,6 +125,7 @@ function stopAudioMeter() {
     if (audioSource)   { try { audioSource.disconnect(); } catch (_) {} audioSource = null; }
     if (audioContext)  { try { audioContext.close(); } catch (_) {} audioContext = null; }
     audioAnalyser = null;
+    audioMeterBuf = null;
     if (audioBar) audioBar.style.width = '0%';
 }
 
