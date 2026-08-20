@@ -11,8 +11,10 @@ let teleprompterLastFrame = 0;
 let teleprompterSpeed = 60;
 let userIsInteractingWithTeleprompter = false;
 let resumeTeleprompterAfterInteraction = false;
+let ffmpegConverterPromise = null;
 
 const PERMISSIONS_KEY = 'daily_permissions_granted';
+const FFMPEG_CDN_BASE = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/esm';
 
 // DOM Elements
 const cameraPreview = document.getElementById('cameraPreview');
@@ -245,6 +247,79 @@ function getFileExtensionFromMimeType(mimeType) {
     return 'webm';
 }
 
+function isMp4MimeType(mimeType) {
+    return typeof mimeType === 'string' && mimeType.includes('mp4');
+}
+
+function isWebmMimeType(mimeType) {
+    return typeof mimeType === 'string' && mimeType.includes('webm');
+}
+
+function buildRecordingFileName(mimeType) {
+    const extension = getFileExtensionFromMimeType(mimeType || 'video/webm');
+    return `Daily-${new Date().toISOString().slice(0, 10)}-${Date.now()}.${extension}`;
+}
+
+async function getFfmpegConverter() {
+    if (ffmpegConverterPromise) {
+        return ffmpegConverterPromise;
+    }
+
+    ffmpegConverterPromise = (async () => {
+        const [{ FFmpeg }, { fetchFile, toBlobURL }] = await Promise.all([
+            import('https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/esm/index.js'),
+            import('https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/esm/index.js')
+        ]);
+
+        const ffmpeg = new FFmpeg();
+        const [coreURL, wasmURL, workerURL] = await Promise.all([
+            toBlobURL(`${FFMPEG_CDN_BASE}/ffmpeg-core.js`, 'text/javascript'),
+            toBlobURL(`${FFMPEG_CDN_BASE}/ffmpeg-core.wasm`, 'application/wasm'),
+            toBlobURL(`${FFMPEG_CDN_BASE}/ffmpeg-core.worker.js`, 'text/javascript')
+        ]);
+
+        await ffmpeg.load({ coreURL, wasmURL, workerURL });
+        return { ffmpeg, fetchFile };
+    })();
+
+    return ffmpegConverterPromise;
+}
+
+async function convertWebmBlobToMp4(webmBlob) {
+    const { ffmpeg, fetchFile } = await getFfmpegConverter();
+    const inputName = `input-${Date.now()}.webm`;
+    const outputName = `output-${Date.now()}.mp4`;
+
+    try {
+        await ffmpeg.writeFile(inputName, await fetchFile(webmBlob));
+        await ffmpeg.exec([
+            '-i', inputName,
+            '-c:v', 'libx264',
+            '-pix_fmt', 'yuv420p',
+            '-preset', 'veryfast',
+            '-movflags', '+faststart',
+            '-c:a', 'aac',
+            '-b:a', '128k',
+            outputName
+        ]);
+
+        const data = await ffmpeg.readFile(outputName);
+        const outputBytes = data instanceof Uint8Array ? data : new Uint8Array(data);
+        return new Blob([outputBytes], { type: 'video/mp4' });
+    } finally {
+        try {
+            await ffmpeg.deleteFile(inputName);
+        } catch (_error) {
+            // Ignore cleanup errors
+        }
+        try {
+            await ffmpeg.deleteFile(outputName);
+        } catch (_error) {
+            // Ignore cleanup errors
+        }
+    }
+}
+
 async function startRecording() {
     if (!mediaStream) {
         showStatus('Camera not available. Please check permissions.', 'error');
@@ -310,28 +385,49 @@ async function saveRecording() {
         return;
     }
 
-    const mimeType = recordedBlob.type || 'video/webm';
-    const extension = getFileExtensionFromMimeType(mimeType);
-    const fileName = `Daily-${new Date().toISOString().slice(0, 10)}-${Date.now()}.${extension}`;
-    const file = new File([recordedBlob], fileName, { type: mimeType });
+    saveBtn.disabled = true;
+    let saveCompleted = false;
+    let exportBlob = recordedBlob;
+    let exportMimeType = recordedBlob.type || 'video/webm';
 
-    if (navigator.canShare && navigator.share && navigator.canShare({ files: [file] })) {
+    if (isWebmMimeType(exportMimeType) && !isMp4MimeType(exportMimeType)) {
+        showStatus('Preparing MP4 export...', 'info');
         try {
-            await navigator.share({
-                files: [file],
-                title: 'Daily Recording',
-                text: 'Your recorded video'
-            });
-            showStatus('Open the shared file and save it to Photos/Files.', 'success');
-            resetRecording();
-            return;
+            const convertedBlob = await convertWebmBlobToMp4(recordedBlob);
+            if (convertedBlob && convertedBlob.size > 0) {
+                exportBlob = convertedBlob;
+                exportMimeType = 'video/mp4';
+                showStatus('Converted to MP4. Ready to save.', 'success');
+            } else {
+                showStatus('MP4 conversion returned empty output. Saving original video file.', 'info');
+            }
         } catch (error) {
-            if (error.name === 'AbortError') return;
-            console.warn('Web Share failed, falling back to download:', error);
+            console.warn('MP4 conversion unavailable, using original recording:', error);
+            showStatus('MP4 conversion unavailable. Saving original video file.', 'info');
         }
     }
 
+    const fileName = buildRecordingFileName(exportMimeType);
+    const file = new File([exportBlob], fileName, { type: exportMimeType });
+
     try {
+        if (navigator.canShare && navigator.share && navigator.canShare({ files: [file] })) {
+            try {
+                await navigator.share({
+                    files: [file],
+                    title: 'Daily Recording',
+                    text: 'Your recorded video'
+                });
+                showStatus('Open the shared file and save it to Photos/Files.', 'success');
+                saveCompleted = true;
+                resetRecording();
+                return;
+            } catch (error) {
+                if (error.name === 'AbortError') return;
+                console.warn('Web Share failed, falling back to download:', error);
+            }
+        }
+
         const url = URL.createObjectURL(file);
         const a = document.createElement('a');
         a.href = url;
@@ -342,10 +438,15 @@ async function saveRecording() {
         document.body.removeChild(a);
         setTimeout(() => URL.revokeObjectURL(url), 1000);
         showStatus('Downloaded the video file.', 'success');
+        saveCompleted = true;
         resetRecording();
     } catch (error) {
         console.error('Error saving recording:', error);
         showStatus('Failed to save video: ' + error.message, 'error');
+    } finally {
+        if (!saveCompleted && recordedBlob) {
+            saveBtn.disabled = false;
+        }
     }
 }
 
