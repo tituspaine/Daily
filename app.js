@@ -63,7 +63,7 @@ async function requestPermissions() {
             audio: true
         });
         
-        // Display camera feed
+        // Display camera feed (mirrored via CSS transform)
         cameraPreview.srcObject = mediaStream;
         showStatus('Camera and microphone ready!', 'success');
     } catch (error) {
@@ -79,11 +79,41 @@ function setupEventListeners() {
     saveBtn.addEventListener('click', saveRecording);
     discardBtn.addEventListener('click', discardRecording);
     teleprompterText.addEventListener('input', updateCharCount);
+    
+    // Stop camera/mic when leaving the page or tab
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('pagehide', stopAllTracks);
+    window.addEventListener('beforeunload', stopAllTracks);
 }
 
 function updateCharCount() {
     const count = teleprompterText.value.length;
     charCount.textContent = `${count.toLocaleString()} characters`;
+}
+
+function handleVisibilityChange() {
+    if (document.hidden) {
+        // Page is hidden - stop camera and mic
+        stopAllTracks();
+    } else {
+        // Page is visible - restart if permissions were granted
+        if (localStorage.getItem(PERMISSIONS_KEY) === 'true' && !mediaStream) {
+            requestPermissions();
+        }
+    }
+}
+
+function stopAllTracks() {
+    if (mediaStream) {
+        mediaStream.getTracks().forEach(track => track.stop());
+        mediaStream = null;
+        cameraPreview.srcObject = null;
+    }
+    
+    if (mediaRecorder && isRecording) {
+        mediaRecorder.stop();
+        isRecording = false;
+    }
 }
 
 async function startRecording() {
@@ -203,7 +233,5 @@ function showStatus(message, type) {
 
 // Cleanup on page unload
 window.addEventListener('beforeunload', () => {
-    if (mediaStream) {
-        mediaStream.getTracks().forEach(track => track.stop());
-    }
+    stopAllTracks();
 });
