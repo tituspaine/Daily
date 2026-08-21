@@ -14,6 +14,9 @@ let resumeTeleprompterAfterInteraction = false;
 
 const PERMISSIONS_KEY = 'daily_permissions_granted';
 const PREFERRED_RECORDER_TYPES = [
+    'video/mp4;codecs=avc1,mp4a.40.2',
+    'video/mp4;codecs=avc1',
+    'video/mp4',
     'video/webm;codecs=vp8,opus',
     'video/webm;codecs=vp9,opus',
     'video/webm'
@@ -240,7 +243,7 @@ function getSupportedMimeType() {
 function getFileExtensionFromMimeType(mimeType) {
     if (mimeType.includes('webm')) return 'webm';
     if (mimeType.includes('mp4')) return 'mp4';
-    return 'webm';
+    return 'mp4';
 }
 
 async function startRecording() {
@@ -292,7 +295,7 @@ async function startRecording() {
             discardBtn.disabled = false;
             recordingIndicator.classList.remove('active');
 
-            const finalMimeType = mediaRecorder.mimeType || getSupportedMimeType() || 'video/webm';
+            const finalMimeType = mediaRecorder.mimeType || getSupportedMimeType() || 'video/mp4';
             recordedBlob = new Blob(recordedChunks, { type: finalMimeType });
             showStatus(`Recording complete. Ready to save as ${getFileExtensionFromMimeType(finalMimeType).toUpperCase()}.`, 'success');
         };
@@ -316,7 +319,7 @@ async function saveRecording() {
         return;
     }
 
-    const mimeType = recordedBlob.type || 'video/webm';
+    const mimeType = recordedBlob.type || 'video/mp4';
     const extension = getFileExtensionFromMimeType(mimeType);
     const fileName = `Daily-${new Date().toISOString().slice(0, 10)}-${Date.now()}.${extension}`;
     const file = new File([recordedBlob], fileName, { type: mimeType });
