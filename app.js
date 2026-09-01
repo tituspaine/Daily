@@ -39,55 +39,106 @@ const teleprompterPlayBtn = document.getElementById('teleprompterPlayBtn');
 const speedSlider = document.getElementById('speedSlider');
 const speedValue = document.getElementById('speedValue');
 
-// Initialize app on load
 window.addEventListener('DOMContentLoaded', initializeApp);
 
 async function initializeApp() {
-    const permissionsGranted = localStorage.getItem(PERMISSIONS_KEY);
-
-    if (permissionsGranted === 'true') {
-        await requestPermissions();
-    } else if (permissionsGranted === null) {
-        showPermissionPrompt();
-    }
-
     setupEventListeners();
     updateCharCount();
     updateSpeedDisplay();
+
+    // A previous denial or browser failure must never strand the app.
+    // If access was previously granted, try to restore the camera. Otherwise
+    // show an explicit user-action prompt so mobile Safari/Chrome can request it.
+    if (localStorage.getItem(PERMISSIONS_KEY) === 'true') {
+        const started = await requestPermissions(false);
+        if (!started) showPermissionPrompt();
+    } else {
+        showPermissionPrompt();
+    }
 }
 
 function showPermissionPrompt() {
     permissionPrompt.style.display = 'flex';
 }
 
-allowBtn.addEventListener('click', async () => {
+function hidePermissionPrompt() {
     permissionPrompt.style.display = 'none';
-    localStorage.setItem(PERMISSIONS_KEY, 'true');
-    await requestPermissions();
-});
+}
 
-denyBtn.addEventListener('click', () => {
-    permissionPrompt.style.display = 'none';
+async function handleAllowAccess() {
+    allowBtn.disabled = true;
+    showStatus('Requesting camera and microphone access…', 'info');
+
+    const started = await requestPermissions(true);
+    if (started) {
+        hidePermissionPrompt();
+    } else {
+        // Keep the prompt available so the user can retry after changing browser settings.
+        showPermissionPrompt();
+    }
+
+    allowBtn.disabled = false;
+}
+
+function handleDenyAccess() {
+    hidePermissionPrompt();
     localStorage.setItem(PERMISSIONS_KEY, 'false');
-    showStatus('Camera and microphone access denied. You can enable it in settings.', 'error');
-});
+    showStatus('Camera and microphone are off. Tap Record or reload the page to request access again.', 'error');
+}
 
-async function requestPermissions() {
+async function requestPermissions(fromUserGesture = false) {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        localStorage.setItem(PERMISSIONS_KEY, 'false');
+        showStatus('This browser does not support camera and microphone access. Open Daily in Safari, Chrome, or another modern browser.', 'error');
+        return false;
+    }
+
     try {
-        mediaStream = await navigator.mediaDevices.getUserMedia({
+        stopMediaTracksOnly();
+
+        const stream = await navigator.mediaDevices.getUserMedia({
             video: { facingMode: 'user' },
             audio: true
         });
-        cameraPreview.srcObject = mediaStream;
+
+        mediaStream = stream;
+        cameraPreview.srcObject = stream;
+        cameraPreview.muted = true;
+        cameraPreview.setAttribute('playsinline', '');
+
+        try {
+            await cameraPreview.play();
+        } catch (playError) {
+            console.warn('Camera preview play was deferred:', playError);
+        }
+
+        localStorage.setItem(PERMISSIONS_KEY, 'true');
+        hidePermissionPrompt();
         showStatus('Camera and microphone ready!', 'success');
+        return true;
     } catch (error) {
-        console.error('Permission denied:', error);
+        console.error('Camera/microphone access failed:', error);
         localStorage.setItem(PERMISSIONS_KEY, 'false');
-        showStatus('Unable to access camera/microphone. Please check permissions.', 'error');
+
+        const name = error && error.name ? error.name : '';
+        if (name === 'NotAllowedError' || name === 'SecurityError') {
+            showStatus('Camera or microphone permission is blocked. Enable both for this site in your browser settings, then tap Allow Access again.', 'error');
+        } else if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
+            showStatus('No usable camera or microphone was found on this device.', 'error');
+        } else if (name === 'NotReadableError' || name === 'TrackStartError') {
+            showStatus('The camera or microphone is being used by another app. Close it and tap Allow Access again.', 'error');
+        } else if (!fromUserGesture) {
+            showStatus('Tap Allow Access to turn on the camera and microphone.', 'error');
+        } else {
+            showStatus('Unable to start the camera and microphone. Check browser permissions and try again.', 'error');
+        }
+        return false;
     }
 }
 
 function setupEventListeners() {
+    allowBtn.addEventListener('click', handleAllowAccess);
+    denyBtn.addEventListener('click', handleDenyAccess);
     recordBtn.addEventListener('click', startRecording);
     stopBtn.addEventListener('click', stopRecording);
     saveBtn.addEventListener('click', saveRecording);
@@ -170,9 +221,7 @@ function stepTeleprompter(now) {
 function handleTeleprompterInteractionStart() {
     userIsInteractingWithTeleprompter = true;
     resumeTeleprompterAfterInteraction = teleprompterPlaying;
-    if (teleprompterPlaying) {
-        teleprompterPlayBtn.textContent = 'Resume';
-    }
+    if (teleprompterPlaying) teleprompterPlayBtn.textContent = 'Resume';
 }
 
 function handleTeleprompterInteractionEnd() {
@@ -192,9 +241,7 @@ function handleTeleprompterWheel() {
         clearTimeout(handleTeleprompterWheel._timer);
         handleTeleprompterWheel._timer = setTimeout(() => {
             userIsInteractingWithTeleprompter = false;
-            if (teleprompterPlaying) {
-                teleprompterPlayBtn.textContent = 'Pause';
-            }
+            if (teleprompterPlaying) teleprompterPlayBtn.textContent = 'Pause';
         }, 120);
     }
 }
@@ -212,18 +259,25 @@ function handleTeleprompterScroll() {
 function handleVisibilityChange() {
     if (document.hidden) {
         stopAllTracks();
-    } else if (localStorage.getItem(PERMISSIONS_KEY) === 'true' && !mediaStream) {
-        requestPermissions();
+    } else if (!mediaStream) {
+        // Do not silently call getUserMedia after returning from the background.
+        // Mobile browsers are most reliable when permission/start happens from a tap.
+        showPermissionPrompt();
+        showStatus('Tap Allow Access to restart the camera and microphone.', 'info');
     }
+}
+
+function stopMediaTracksOnly() {
+    if (mediaStream) {
+        mediaStream.getTracks().forEach(track => track.stop());
+        mediaStream = null;
+    }
+    cameraPreview.srcObject = null;
 }
 
 function stopAllTracks() {
     stopTeleprompterPlayback();
-    if (mediaStream) {
-        mediaStream.getTracks().forEach(track => track.stop());
-        mediaStream = null;
-        cameraPreview.srcObject = null;
-    }
+    stopMediaTracksOnly();
     if (mediaRecorder && isRecording) {
         mediaRecorder.stop();
         isRecording = false;
@@ -232,11 +286,9 @@ function stopAllTracks() {
 
 function getSupportedMimeType() {
     if (!window.MediaRecorder) return '';
-
     for (const type of PREFERRED_RECORDER_TYPES) {
         if (MediaRecorder.isTypeSupported(type)) return type;
     }
-
     return '';
 }
 
@@ -247,8 +299,9 @@ function getFileExtensionFromMimeType(mimeType) {
 }
 
 async function startRecording() {
-    if (!mediaStream) {
-        showStatus('Camera not available. Please check permissions.', 'error');
+    if (!mediaStream || mediaStream.getTracks().every(track => track.readyState !== 'live')) {
+        showPermissionPrompt();
+        showStatus('Camera and microphone are not active. Tap Allow Access first.', 'error');
         return;
     }
 
@@ -263,15 +316,12 @@ async function startRecording() {
             bitsPerSecond: 3000000,
             videoKeyFrameIntervalDuration: 1000
         };
-
         if (mimeType) options.mimeType = mimeType;
 
         mediaRecorder = new MediaRecorder(mediaStream, options);
 
         mediaRecorder.ondataavailable = (event) => {
-            if (event.data && event.data.size > 0) {
-                recordedChunks.push(event.data);
-            }
+            if (event.data && event.data.size > 0) recordedChunks.push(event.data);
         };
 
         mediaRecorder.onerror = (event) => {
@@ -308,9 +358,7 @@ async function startRecording() {
 }
 
 function stopRecording() {
-    if (mediaRecorder && isRecording) {
-        mediaRecorder.stop();
-    }
+    if (mediaRecorder && isRecording) mediaRecorder.stop();
 }
 
 async function saveRecording() {
@@ -326,11 +374,7 @@ async function saveRecording() {
 
     if (navigator.canShare && navigator.share && navigator.canShare({ files: [file] })) {
         try {
-            await navigator.share({
-                files: [file],
-                title: 'Daily Recording',
-                text: 'Your recorded video'
-            });
+            await navigator.share({ files: [file], title: 'Daily Recording', text: 'Your recorded video' });
             showStatus('Open the shared file and save it to Photos/Files.', 'success');
             resetRecording();
             return;
@@ -376,7 +420,6 @@ function resetRecording() {
 function showStatus(message, type) {
     statusMessage.textContent = message;
     statusMessage.className = `status-message ${type}`;
-
     if (type !== 'error') {
         setTimeout(() => {
             statusMessage.textContent = '';
